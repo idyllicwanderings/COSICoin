@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package chat;
+
+message Transaction {
+    uint32 txID = 1;
+    repeated Input input = 2;
+    repeated Output output = 3;
+    uint32 senderID = 4;
+    string sendersig = 5;  
+    string publickey = 6;
+    message Input {
+        uint32 txID = 1;
+        uint64 outputIndex = 2;
+    }
+    message Output {
+        uint64 value = 1;
+        uint32 receiverID = 2;  
+    }
+}
+
+message Header {
+    string prevBlockDigest = 1;
+    string merkleRoot = 2;
+}
+
+message Block {
+    Header header = 1;
+    uint64 blockID = 2;
+    repeated Transaction transaction = 3;
+    string validatorSig = 4;
+    uint32 validatorID = 5;
+    string publickey = 6;
+}
+
+message UTXO {
+    uint32 transaction_id = 1;
+    uint32 output_index = 2;
+    uint64 output_value = 3;
+    uint32 receiver_id = 4;
+}
+
+message UTXOlist {
+    repeated UTXO utxo = 1;
+}
+
+message Message {
+    int32 type = 1;
+    int64 sender_id = 2;
+    int32 round = 3;
+    oneof send {
+        Block block = 4;
+        Transaction tx = 5;
+        UTXOlist utxolist = 6;
+    }
+}
+
+message Send {
+    Message message = 1;
+}
+
+message Ack { }
+
+service Chat {
+    rpc Talk (Send) returns (Ack) {}
+}
