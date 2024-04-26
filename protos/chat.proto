@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package chat;
+
+message Block {
+    int64 time = 1;
+    string transactions = 2;
+    uint64 id = 3;
+    string prev_hash = 4;
+    string hash = 5;
+    int64 nonce = 6;
+}
+
+message Message {
+    int32 type = 1;
+    // ECHO = 0;
+    // SEND = 1;
+    // READY = 2;
+
+    Block block = 2;
+    int64 sender_id = 3;
+    int32 round = 4;
+}
+
+message Send {
+    Message message = 1;
+}
+
+message Ack { }
+
+service Chat {
+    rpc Talk (Send) returns (Ack) {}
+}

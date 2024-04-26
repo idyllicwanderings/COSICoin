@@ -1,0 +1,29 @@
+#include "client.h"
+
+int main() {
+    comms::ChatClientImpl client;
+
+    std::string input;
+
+    while (input != "q") {
+        std::cout << "Enter transaction (q to quit): ";
+        std::cin >> input;
+
+        if (input == "q") {
+            break;
+        }
+        blockchain::Block block1(1, input + "-1");
+        blockchain::Message message1(blockchain::SEND, block1, 1, 1);
+        blockchain::Block block2(1, input + "-2");
+        blockchain::Message message2(blockchain::SEND, block2, 1, 1);
+        blockchain::Block block3(1, input + "-3");
+        blockchain::Message message3(blockchain::SEND, block3, 1, 1);
+        blockchain::Block block4(1, input + "-4");
+        blockchain::Message message4(blockchain::SEND, block4, 1, 1);
+
+        client.Broadcast(message1);
+        client.Broadcast(message2);
+        client.Broadcast(message3);
+        client.Broadcast(message4);
+    }
+}
