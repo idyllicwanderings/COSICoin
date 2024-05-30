@@ -4,15 +4,15 @@
 
 Requires a C++*17* or higher version.
 
-gRPC: https://grpc.io/
+- gRPC: https://grpc.io/
 
-gTest: https://github.com/google/googletest
+- gTest: https://github.com/google/googletest
 
-gLog: https://github.com/google/glog
+- gLog: https://github.com/google/glog
 
-the sha256 implementation: [https://github.com/stbrumme/hash-library](https://github.com/stbrumme/hash-library).
+- the sha256 implementation: [https://github.com/stbrumme/hash-library](https://github.com/stbrumme/hash-library)
 
-nlohmann: https://github.com/nlohmann/json
+- nlohmann JSON: https://github.com/nlohmann/json
 
 ## Building the code
 
@@ -82,3 +82,5 @@ The modified verilog files are also provided. They can be placed directly in the
 logging module(glog) unavailable for cross-compiling
 
 database employment
+
+transaction input corner test(signed integer forbidden)
