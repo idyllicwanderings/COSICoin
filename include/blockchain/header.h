@@ -9,16 +9,24 @@
 #include <string>
 #include <vector>
 
+#include "json/json.hpp"
 #include "signature/hash.h"
 #include "transaction.h"
+
+using json = nlohmann::json;
 
 namespace blockchain {
 
 class Header {
    public:
     Header(std::string prevBlockDigest) : prevBlockDigest_(prevBlockDigest){};
-    Header(const chat::Header& proto_header);
+    Header(const chat::Header& proto_header) {
+        prevBlockDigest_ = proto_header.prevblockdigest();
+        merkleRoot_ = proto_header.merkleroot();
+    }
     Header() = default;
+    // Copy constructor
+    Header(const blockchain::Header& header) : prevBlockDigest_(header.getPrevBlockDigest()), merkleRoot_(header.getMerkleRoot()){};
 
     std::string getID() const;
     std::string getPrevBlockDigest() const { return prevBlockDigest_; }
@@ -33,7 +41,14 @@ class Header {
      * Converts itself to a proto buffer header
      * Needed to be able to send over GRPC message
      */
-    chat::Header toProtoHeader() const;
+    inline chat::Header toProtoHeader() const {
+        chat::Header proto_header;
+
+        proto_header.set_prevblockdigest(prevBlockDigest_);
+        proto_header.set_merkleroot(merkleRoot_);
+
+        return proto_header;
+    }
 
     /*
      * Overload the equality operator for comparing two Header objects
@@ -48,6 +63,12 @@ class Header {
     friend bool operator!=(const Header& lhs, const Header& rhs) {
         return !(lhs == rhs);
     }
+
+    /*
+     * json converters
+     */
+    std::string to_string();
+    void from_string(std::string header_string);
 
    private:
     std::string prevBlockDigest_;

@@ -7,11 +7,15 @@ Output::Output(const chat::Transaction::Output& proto_output) {
     receiverID_ = proto_output.receiverid();
 }
 
-// chat::Output Output::toProtoOutput() const {
-//     chat::Output proto_output;
+std::string Output::to_string() {
+    json j;
+    j["value"] = value_;
+    j["receiverID"] = receiverID_;
+    return j.dump();
+}
 
-//     proto_output.set_value(value_);
-//     proto_output.set_receiverid(receiverID_);
-
-//     return proto_output;
-// }
+void Output::from_string(std::string output_string) {
+    json j = json::parse(output_string);
+    value_ = j.at("value");
+    receiverID_ = j.at("receiverID");
+}

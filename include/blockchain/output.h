@@ -9,25 +9,30 @@
 #include <cstdint>
 #include <string>
 
+#include "json/json.hpp"
+
+using json = nlohmann::json;
+
 namespace blockchain {
 
 class Output {
    public:
     Output(uint64_t value, uint32_t receiverID) : value_(value), receiverID_(receiverID){};
     Output(const chat::Transaction::Output& proto_output);
+    Output(){};
+    // Copy constructor
+    Output(const blockchain::Output& output) : value_(output.getValue()), receiverID_(output.getReceiverID()){};
 
     uint64_t getValue() const { return value_; };
 
     uint32_t getReceiverID() const { return receiverID_; };
 
-    /*
-     * Converts itself to a proto buffer output
-     * Needed to be able to send over GRPC message
-     */
-    // chat::Output toProtoOutput() const;
-
     friend bool operator==(const Output& output1, const Output& output2) {
         return output1.value_ == output2.value_ && output1.receiverID_ == output2.receiverID_;
+    }
+
+    friend bool operator!=(const Output& output1, const Output& output2) {
+        return output1.value_ != output2.value_ && output1.receiverID_ != output2.receiverID_;
     }
 
     friend bool operator<(const Output& output1, const Output& output2) {
@@ -43,6 +48,12 @@ class Output {
         }
         return output1.value_ > output2.value_;
     }
+
+    /*
+     * json converters
+     */
+    std::string to_string();
+    void from_string(std::string output_string);
 
    private:
     uint64_t value_;

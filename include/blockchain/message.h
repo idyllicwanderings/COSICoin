@@ -16,20 +16,34 @@ enum MsgType { ECHO,
                SEND,
                READY };
 
-enum MsgContent { BLOCK,
-                  TRANSACTION,
-                  UTXOLIST };
-
 class Message {
    public:
-    Message(MsgType type, const blockchain::Block& block, uint64_t sender_id, uint16_t round)
-        : type_(type), block_(block), sender_id_(sender_id), round_(round), empty_(false), content_type_(BLOCK) {}
-    Message(MsgType type, const blockchain::Transaction& transaction, uint64_t sender_id, uint16_t round)
-        : type_(type), transaction_(transaction), sender_id_(sender_id), round_(round), empty_(false), content_type_(TRANSACTION) {}
-    Message(MsgType type, std::vector<blockchain::UTXO>& utxo, uint64_t sender_id, uint16_t round)
-        : type_(type), utxolist_(utxo), sender_id_(sender_id), round_(round), empty_(false), content_type_(UTXOLIST) {}
-    Message(const chat::Message& proto_message);
+    /*
+     * Constructor to make empty message
+     */
     Message() : empty_(true), block_(Block()){};
+    /*
+     * Basic constructor
+     */
+    Message(MsgType type, const blockchain::Block& block, uint64_t sender_id, uint16_t round)
+        : type_(type), block_(block), sender_id_(sender_id), round_(round), empty_(false) {}
+    /*
+     * Constructor to make message from proto message
+     */
+    Message(const chat::Message& proto_message) {  // Don't move this implementation to message.cc because otherwise the ghosts in the ESAT computers will hide it from the compiler when linking it to an executable
+        uint32_t proto_type = proto_message.type();
+        if (proto_type == 0) {
+            type_ = MsgType::ECHO;
+        } else if (proto_type == 1) {
+            type_ = MsgType::SEND;
+        } else if (proto_type == 2) {
+            type_ = MsgType::READY;
+        }
+        sender_id_ = proto_message.sender_id();
+        round_ = proto_message.round();
+        empty_ = false;
+        block_.fromProtoBlock(proto_message.block());
+    };
     //~Message();
 
     MsgType getType() const { return type_; };
@@ -37,12 +51,6 @@ class Message {
     int setType(const MsgType type_message);
 
     const blockchain::Block& getBlock() const { return block_; };
-
-    const blockchain::Transaction& getTransaction() const { return transaction_; };
-
-    const std::vector<blockchain::UTXO>& getUTXOlist() const { return utxolist_; };
-
-    const MsgContent getMessageContentType() const { return content_type_; };
 
     int getSenderId() const { return sender_id_; };
 
@@ -54,17 +62,35 @@ class Message {
 
     friend std::string Msgtype2String(MsgType type);
 
-    chat::Message toProtoMessage() const;
+    /*
+     * Converts message to proto message
+     */
+    chat::Message toProtoMessage() const {  // Same as for the constructor implementation
+        chat::Message proto_message;
+
+        if (type_ == MsgType::ECHO) {
+            proto_message.set_type(0);
+        } else if (type_ == MsgType::SEND) {
+            proto_message.set_type(1);
+        } else if (type_ == MsgType::READY) {
+            proto_message.set_type(2);
+        }
+
+        chat::Block* proto_block = proto_message.mutable_block();
+        block_.toProtoBlock(proto_block);
+
+        proto_message.set_sender_id(sender_id_);
+        proto_message.set_round(round_);
+
+        return proto_message;
+    };
 
    private:
     MsgType type_;
     blockchain::Block block_;
-    blockchain::Transaction transaction_;
-    std::vector<blockchain::UTXO> utxolist_;
     uint64_t sender_id_;
     uint32_t round_;
     bool empty_;
-    MsgContent content_type_;
 };
 
 }  // namespace blockchain

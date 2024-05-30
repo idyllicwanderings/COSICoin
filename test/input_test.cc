@@ -12,13 +12,14 @@ TEST(InputTest, Getters) {
     EXPECT_EQ(input1.getTxID(), 1000);
 }
 
-// TEST(InputTest, ProtoConvert) {
-//     blockchain::Input input1(1000, 1);
-//     chat::Input proto_input1 = input1.toProtoInput();
-//     blockchain::Input input2(proto_input1);
-//     EXPECT_EQ(input2.getOutputIndex(), 1);
-//     EXPECT_EQ(input2.getTxID(), 1000);
-// }
+TEST(InputTest, StringConvert) {
+    blockchain::Input input1(1000, 1);
+    std::string string_input1 = input1.to_string();
+    blockchain::Input input2;
+    input2.from_string(string_input1);
+    EXPECT_EQ(input2.getOutputIndex(), 1);
+    EXPECT_EQ(input2.getTxID(), 1000);
+}
 
 TEST(InputTest, EqualOperator) {
     blockchain::Input input1(1000, 1);

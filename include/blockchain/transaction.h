@@ -8,23 +8,24 @@
 #include <grpcpp/health_check_service_interface.h>
 
 #include <cstddef>
+#include <iomanip>
 #include <string>
 #include <vector>
 
 #include "input.h"
+#include "json/json.hpp"
 #include "output.h"
 #include "signature/hash.h"
 #include "utxo.h"
+
+using json = nlohmann::json;
 
 namespace blockchain {
 
 class Transaction {
    public:
     Transaction(uint32_t txID) : txID_(txID){};
-    // Transaction(const chat::Transaction &proto_transaction);
-    // Transaction(std::vector<blockchain::Input> inputs, std::vector<blockchain::Output> outputs,
-    //     unsigned char* senderSig, uint16_t senderID, std::string txID, signature::SigKey public_key) : inputs_(inputs),
-    //     outputs_(outputs), senderSig_(senderSig), senderID_(senderID), txID_(txID), public_key_(public_key){};
+    Transaction(uint32_t txID, uint16_t senderID) : txID_(txID), senderID_(senderID){};
     Transaction(std::vector<blockchain::Input> inputs, std::vector<blockchain::Output> outputs,
                 uint16_t senderID, uint32_t txID, signature::SigKey public_key) : inputs_(inputs),
                                                                                   outputs_(outputs),
@@ -32,16 +33,27 @@ class Transaction {
                                                                                   txID_(txID),
                                                                                   public_key_(public_key){};
     Transaction() = default;
+    // Copy constructor
+    Transaction(const blockchain::Transaction& transaction) : inputs_(transaction.getInputs()),
+                                                              outputs_(transaction.getOutputs()),
+                                                              senderID_(transaction.getSenderID()),
+                                                              txID_(transaction.getID()),
+                                                              public_key_(transaction.getPublicKey()),
+                                                              senderSig_(transaction.getSenderSig()){};
 
     /*
      * Sets the sender signature
      */
-    void setSenderSig(unsigned char* senderSig) { senderSig_ = senderSig; };
+    void setSenderSig(std::vector<std::string> senderSig) { senderSig_ = senderSig; };
 
     /*
      * Sets the txID
      */
     void settxID(uint32_t txID) { txID_ = txID; };
+    /*
+     * Sets the sender ID
+     */
+    void setSenderID(uint16_t senderID) { senderID_ = senderID; };
 
     /*
      * Returns transaction ID
@@ -53,10 +65,12 @@ class Transaction {
      */
     signature::SigKey getPublicKey() const { return public_key_; };
 
+    void setPublicKey(signature::SigKey key) { public_key_ = key; };
+
     /*
      * Returns Sender Signature
      */
-    unsigned char* getSenderSig() const { return senderSig_; };
+    std::vector<std::string> getSenderSig() const { return senderSig_; };
 
     /*
      * Returns Sender ID
@@ -69,7 +83,7 @@ class Transaction {
      * - Checks if all inputs are in UTXO
      * - Checks if all receivers in ouput are valid receivers
      */
-    bool checkSpendingConditions(std::vector<UTXO>& utxo, std::vector<uint32_t>& publicKeys);
+    bool checkSpendingConditions(UTXOlist& utxolist, std::vector<uint32_t>& wallet_ids);
 
     /*
      * Appends input to list of inputs
@@ -103,6 +117,8 @@ class Transaction {
 
     std::string getDigest() const;
 
+    std::string getStringDigest() const;
+
     /*
      * Converts itself to a proto buffer transaction
      * Needed to be able to send over GRPC message
@@ -120,14 +136,19 @@ class Transaction {
         return !(transaction1 == transaction2);
     }
 
+    /*
+     * json converters
+     */
+    std::string to_string();
+    void from_string(std::string tx_string);
+
    private:
     std::vector<blockchain::Input> inputs_;
     std::vector<blockchain::Output> outputs_;
-    unsigned char* senderSig_ = nullptr;
+    std::vector<std::string> senderSig_;
     uint16_t senderID_;
     uint32_t txID_;
     signature::SigKey public_key_;
-    uint16_t senderSigSize_ = 4;
 };
 }  // namespace blockchain
 

@@ -7,11 +7,15 @@ Input::Input(const chat::Transaction::Input& proto_input) {
     outputIndex_ = proto_input.outputindex();
 }
 
-// chat::Input Input::toProtoInput() const {
-//     chat::Input proto_input;
+std::string Input::to_string() {
+    json j;
+    j["txID"] = txID_;
+    j["outputIndex"] = outputIndex_;
+    return j.dump();
+}
 
-//     proto_input.set_txid(txID_);
-//     proto_input.set_outputindex(outputIndex_);
-
-//     return proto_input;
-// }
+void Input::from_string(std::string input_string) {
+    json j = json::parse(input_string);
+    txID_ = j.at("txID");
+    outputIndex_ = j.at("outputIndex");
+}

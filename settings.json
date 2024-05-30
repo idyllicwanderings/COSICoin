@@ -1,0 +1,32 @@
+{
+    "leaderID": 0,
+    "myValidatorID": 2,
+    "myWalletID": -1,
+    "validators": [
+        {
+            "id": 0,
+            "address": "192.168.0.5",
+            "port": 50000,
+            "faulty": false
+        },
+        {
+            "id": 1,
+            "address": "192.168.0.54",
+            "port": 50001,
+            "faulty": true
+        },
+        {
+            "id": 2,
+            "address": "192.168.0.27",
+            "port": 50002,
+            "faulty": false
+        },
+        {
+            "id": 3,
+            "address": "192.168.0.28",
+            "port": 50003,
+            "faulty": false
+        }
+    ],
+    "wallets": [0, 1, 2, 3]
+}

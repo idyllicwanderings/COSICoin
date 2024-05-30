@@ -1,259 +1,274 @@
 #include "bracha/node.h"
 
+// #include <chrono>
+
 using namespace blockchain;
 using namespace bracha;
 
+void bracha::Node::RunProtocol(bool broadcast) {
 
+    std::cout << "Node " << id_ << ": Run protocol started" << std::endl;
+    mutex_cons_.lock();
+    should_broadcast_ = broadcast;
 
-bracha::Node::Node(const std::string& name, uint16_t id, uint16_t port,
-  comms::ChatServiceImpl* server):
-  //, comms::ChatClientImpl* client):
-  name_(name), 
-  id_(id), 
-  port_(port), 
-  is_faulty_(false), 
-  is_lead_(false), 
-  round_(0),
-  client_(),
-  server_(server)
-  {
-  send_this_round_ = "";
-  Run();
-};
-
-void bracha::Node::Run() {
-  // opening a new thread for running the server
-  //std::thread server_thread(&comms::ChatServiceImpl::Run, &server_, port_);
-  //server_thread.join();
+    while (should_broadcast_) {
+        mutex_cons_.unlock();
+        // std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (RunTaskInWait()) {
+            broadcastRound();
+        }
+        mutex_cons_.lock();
+    };
+    mutex_cons_.unlock();
 }
 
-bracha::Node::~Node(){
-  ready_this_round_.clear();
-  echo_this_round_ .clear();
-  send_this_round_ = "";  
-};
-
-
-void bracha::Node::RunProtocol() {
-  //std::cout << "Run protocol started" << std::endl;
-  should_broadcast_ = true;
-
-  // TODO: the round is not used or refreshedfrun
-  while (should_broadcast_) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    if (RunTaskInLoopAndWait()) {
-      std::cout << "executing one round" << std::endl;
-      broadcastRound(round_);
-      incrementRound();
-      
-    }
-  };
-
-}
-
-
-
-bool bracha::Node::RunTaskInLoopAndWait() {
-  std::vector<Message> msg_list;
-  if (server_->getMessages(msg_list)) {
+bool bracha::Node::RunTaskInWait() {
+    std::vector<Message> msg_list;
+    std::unique_lock<std::mutex> lck(mutex_grpc_);
+    cond_grpc_->wait(lck, [this]() { return grpcServer_->newConsensusMessages() || !should_broadcast_; });
+    // std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // Wait for one second to make sure all messages are in correct group received (easier to debug)
+    grpcServer_->getMessages(msg_list);
+    mutex_grpc_.unlock();
     updateRecvMessages(msg_list);
     return true;
-  }
-  return false;
 }
 
+// iterate the msg list, add to send, ready and echo.
+void bracha::Node::updateRecvMessages(const std::vector<Message> msg_list) {
+    // clear the <SEND> so that it does not send multiple ECHO to the same SEND.
+    send_this_round_ = "";
 
-//iterate the msg list, add to send, ready and echo.
-void bracha::Node::updateRecvMessages(const std::vector<Message>& msg_list) {
+    std::cout << "Node " << id_ << ": renewing msg list #msgs: " << msg_list.size() << std::endl;
+    for (blockchain::Message msg : msg_list) {
+        blockchain::Block block(msg.getBlock());
+        uint64_t blk_id = block.getID();
+        std::string blk_hash = block.getHeader().getID();
+        //mutex_io_->lock();
+        std::cout << "Node " << id_ << ": received block: " << blk_id << ", " << blk_hash.substr(0, 10) << ", message type: " << msg.getType() << ", from node " << msg.getSenderId() << std::endl;
+        //mutex_io_->unlock();
 
-  //clear the <SEND> so that it does not send multiple ECHO to the same SEND.
-  send_this_round_ = "";
+        // Verify the block signature
+        if (!checkBlockSig(block)) {
+            //mutex_io_->lock();
+            std::cout << "Node " << id_ << ": block signature invalid, skipping block" << std::endl;
+            //mutex_io_->unlock();
+            continue;
+        }
 
-  for (auto const& msg: msg_list) {
-    std::cout << "renewing msg list!" << std::endl;
-    std::string blk_hash = msg.getBlock().getHash();
-    
-    //update the block llist
-    if (blk_list_.find(blk_hash) == blk_list_.end()) {
-      blk_list_[blk_hash] = msg.getBlock();
+        // Verify the block
+        if (!verified_blocks_.count(blk_hash)) {
+            // Block not yet verified
+            if (!block.verify(utxolist_, wallet_ids_)) {
+                //mutex_io_->lock();
+                std::cout << "Node " << id_ << ": block verification failed, skipping block" << std::endl;
+                //mutex_io_->unlock();
+                continue;
+            } else {
+                verified_blocks_.insert(blk_hash);
+            }
+        }
+
+        // Save the block's signature
+        uint16_t node_id = block.getValidatorID();
+        blockchain::BlockSignature sig;
+        sig.signature = block.getValidatorSignature();
+        sig.public_key = val_sig_keys_[node_id];
+        sig.validator_id = node_id;
+        sig.round = msg.getRound();
+        mutex_cons_.lock();
+        if (blocks_.find(blk_hash) == blocks_.end()) {
+            blocks_[blk_hash] = block;
+        }
+        blocks_[blk_hash].addValidatorSignature(sig);
+        mutex_cons_.unlock();
+
+        // update the block list
+        if (blk_list_.find(blk_hash) == blk_list_.end()) {
+            blk_list_[blk_hash] = block;
+        }
+
+        switch (msg.getType()) {
+            case MsgType::SEND: {
+                // std::cout << "Node " << id_ << ": counting SEND from " << msg.getSenderId() << std::endl;
+                send_this_round_ = blk_hash;
+                break;
+            }
+            case MsgType::ECHO: {
+                // std::cout << "Node " << id_ << ": counting ECHO from " << msg.getSenderId() << std::endl;
+                if (echo_this_round_.find(blk_hash) != echo_this_round_.end())
+                    echo_this_round_[blk_hash]++;
+                else
+                    echo_this_round_[blk_hash] = 1;
+                break;
+            }
+            case MsgType::READY: {
+                // std::cout << "Node " << id_ << ": counting READY from " << msg.getSenderId() << std::endl;
+                if (ready_this_round_.find(blk_hash) != ready_this_round_.end())
+                    ready_this_round_[blk_hash]++;
+                else
+                    ready_this_round_[blk_hash] = 1;
+                break;
+            }
+            default:
+                continue;
+        }
     }
-    
-    switch (msg.getType()) {
-      case MsgType::SEND: {
-         //std::cout << id_ <<" recvs SEND frm "  << msg.getSenderId() << std::endl;
-        // Recvs a <SEND, block>, broadcast echo.
-    	send_this_round_ = blk_hash;
-      }
-      case MsgType::ECHO: {
-         //std::cout << id_ <<" recvs ECHO frm "  << msg.getSenderId() << std::endl;
-        if (echo_this_round_.find(blk_hash) != echo_this_round_.end()) 
-          echo_this_round_[blk_hash]++;
-        else
-          echo_this_round_[blk_hash] = 0;
-      }
-      case MsgType::READY: {
-        //std::cout << id_ <<" recvs READY frm "  << msg.getSenderId() << std::endl;
-        if (ready_this_round_.find(blk_hash) != ready_this_round_.end()) 
-          ready_this_round_[blk_hash]++;
-        else
-          ready_this_round_[blk_hash] = 0;
-      }
-      default:
-        continue;
-    }
-  }
-
 }
 
-
-void bracha::Node::broadcastRound(uint16_t round) {
-
-  this->should_broadcast_ = true;
-  bool recv_send = false;
-  // check whether conditions on each round are satisified or not.
-
-  if (send_this_round_ != "") {
-    broadcastMessage(blockchain::Message(MsgType::ECHO, blk_list_[send_this_round_], this->id_, 2));
-    send_this_round_= "";
-  }
- 
-
-  for (const auto& [blk_hash, nb_recv] : echo_this_round_) {
-    // threshold 1
-    if ((nb_recv >= floor((n_ + f_ + 1) / 2)) && !ready_sent_.count(blk_hash)) {
-      broadcastMessage(blockchain::Message(MsgType::READY, \
-                        blk_list_[blk_hash], this->id_, 2));
+void print_dict(std::string name, std::unordered_map<std::string, uint64_t> dict) {
+    std::cout << name << ": ";
+    for (const auto& [key, value] : dict) {
+        std::cout << key.substr(0, 10) << ": " << value << ", ";
     }
-  }
-
-  for (const auto& [blk_hash, nb_recv] : ready_this_round_) {
-    // threshold 2
-    if ( (nb_recv >= f_ + 1) && !ready_sent_.count(blk_hash)) {
-      broadcastMessage(blockchain::Message(MsgType::READY, \
-                        blk_list_[blk_hash], this->id_, 3));
-    }
-
-    // delivering conditions
-    if (nb_recv > 2 * bracha::f_ + 1) {
-      std::cout << id_ << " delivering conditions reached!" << std::endl;
-      this->should_broadcast_ = false;
-      this->voted_hash_ = blk_hash;
-      break;
-    }
-
-  }
-
+    std::cout << std::endl;
 }
 
+void bracha::Node::broadcastRound() {
+    this->should_broadcast_ = true;
+    bool recv_send = false;
+    // check whether conditions on each round are satisified or not.
 
+    //mutex_io_->lock();
+    print_dict("Node " + std::to_string(id_) + ": echo", echo_this_round_);
+    print_dict("Node " + std::to_string(id_) + ": ready", ready_this_round_);
+    //mutex_io_->unlock();
 
-void bracha::Node::broadcastMessage(const blockchain::Message& msg) {
-  client_.Broadcast(msg);
-  //TODO: logging::out << "Broadcasting message: " << msg << "\n";
-}
-
-
-std::ostream& operator<<(std::ostream& o, const bracha::Node& obj) {
-  // Outputs the basic information of the node.
-  o << "Node's ID is: " << obj.getId() << ";" 
-    << "name is: "      << obj.getName() << ";" << "\n";
-  // Outputs the nodes' accepted node.
-  if (obj.isConsensus()) {
-    o << "Node has accepted the node " << obj.getVotedHash() << "\n";
-  }
-  else {
-    o << "Node has not accepted any nodes yet!" << "\n";
-  }
-  return o;  
-};
-
-
-
-bracha::LeaderNode::LeaderNode(const std::string& name, uint64_t id, uint16_t port, 
-	comms::ChatServiceImpl* server) {
-	//, comms::ChatClientImpl* client) {
-  name_ = name;
-  id_ = id;
-  port_ = port;
-  is_faulty_ = false;
-  is_lead_ = true; 
-  round_ = 0;
-  send_this_round_ = "";
-  //client_ = client;
-  server_ = server;
-  
-  Run();
-};
-
-
-void bracha::LeaderNode::RunProtocol() {
-  should_broadcast_ = true;
-  // send send
-  propose(); 
-
-  // TODO: the round is not used or refreshed
-  while (should_broadcast_) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    if (RunTaskInLoopAndWait()) {
-      broadcastRound(round_);
-      incrementRound();
+    if (send_this_round_ != "") {
+        broadcastMessage(MsgType::ECHO, blk_list_[send_this_round_], 1);
+        send_this_round_ = "";
     }
-  };
-  
+
+    for (const auto& [blk_hash, nb_recv] : echo_this_round_) {
+        if ((nb_recv >= floor((n_ + f_ + 1) / 2)) && !ready_sent_.count(blk_hash)) {
+            broadcastMessage(MsgType::READY, blk_list_[blk_hash], 2);
+            ready_sent_.insert(blk_hash);
+        }
+    }
+
+    for (const auto& [blk_hash, nb_recv] : ready_this_round_) {
+        if ((nb_recv >= f_ + 1) && !ready_sent_.count(blk_hash)) {
+            broadcastMessage(MsgType::READY, blk_list_[blk_hash], 3);
+            ready_sent_.insert(blk_hash);
+        }
+
+        // delivering conditions
+        if (nb_recv > 2 * f_ + 1) {
+            std::cout << "Node " << id_ << ": Delivering conditions reached for block: " << blk_hash.substr(0, 10) << std::endl;
+            mutex_cons_.lock();
+            this->should_broadcast_ = false;
+            this->voted_hash_ = blk_hash;
+            mutex_cons_.unlock();
+            // remove block from counters
+            echo_this_round_.erase(blk_hash);
+            ready_this_round_.erase(blk_hash);
+            mutex_cons_.lock();
+            accepted_blocks_.push_back(blk_hash);
+            mutex_cons_.unlock();
+            break;
+        }
+    }
 }
 
-void bracha::LeaderNode::propose() {
-  Block blk = Block(blk_id_++);
-  blockchain::Message msg = Message(blockchain::MsgType::SEND, blk, id_, round_);
-  broadcastMessage(msg);
-};
+void bracha::Node::broadcastMessage(blockchain::MsgType type, blockchain::Block block, uint16_t round) {
+    signBlock(block);
+    //mutex_io_->lock();
+    std::cout << "Node " << id_ << ": Broadcasting block " << block.getHeader().getID().substr(0, 10) << " in message type " << type << std::endl;
+    //mutex_io_->unlock();
+    blockchain::Message msg = Message(type, block, id_, round);
+    mutex_grpc_.lock();
+    grpcClient_.Broadcast(msg);
+    mutex_grpc_.unlock();
+}
 
+void bracha::LeaderNode::RunProtocol(bool broadcast) {
+    mutex_cons_.lock();
+    should_broadcast_ = broadcast;
 
-bracha::FaultNode::FaultNode(const std::string& name, uint16_t id, uint16_t port, bool is_lead) {
-  name_ = name;
-  id_ = id;
-  port_ = port;
-  is_faulty_ = true;
-  faulty_ = 1;
-  is_lead_ = is_lead; 
-  round_ = 0;
-  send_this_round_ = "";
-  Run();
-};
+    while (should_broadcast_) {
+        mutex_cons_.unlock();
+        if (RunTaskInWait()) {
+            broadcastRound();
+        }
+        mutex_cons_.lock();
+    };
+    mutex_cons_.unlock();
+}
 
+int bracha::LeaderNode::Propose(blockchain::Block& bx) {
+    std::cout << "Node.cc:  " << "propose started " << std::endl;
+    broadcastMessage(blockchain::MsgType::SEND, bx, 0);
+    std::cout << "Node.cc:  " << "propose ended " << std::endl;
+    return 1;
+}
 
-std::string byzantineBehavior2String(bracha::ByzantineBehavior b) {
-  switch (b) {
-    case bracha::ByzantineBehavior::CRASH:
-      return "crash";
-    case bracha::ByzantineBehavior::DELAY_SEND:
-      return "delay_send";
-    case bracha::ByzantineBehavior::PARTIAL_SEND:
-      return "partial_send";
-    case bracha::ByzantineBehavior::WRONG_ORDER:
-      return "wrong_order";
-    case bracha::ByzantineBehavior::IMPERSONATE:
-      return "impersonate";
-    default:
-      throw std::invalid_argument("unexpected Byzantine Behavior value");
-  }
-};
+void bracha::Node::signBlock(blockchain::Block& block) {
+    my_current_private_key_ = my_next_key_pair_.getPrivateKey();
+    my_current_public_key_ = my_next_key_pair_.getPublicKey();
+    my_next_key_pair_.KeyGen();
+    signature::SigKey my_next_pub_key = my_next_key_pair_.getPublicKey();
+    //mutex_io_->lock();
+    std::cout << "Node " << id_ << ": signing block " << block.getHeader().getID().substr(0, 10) << " for pub key: " << signature::print_SigKey(my_current_public_key_) << " with next key: " << signature::print_SigKey(my_next_pub_key) << std::endl;
+    //mutex_io_->unlock();
+    block.sign(my_current_private_key_, id_, my_next_pub_key);
+    assert(signature::Verify(block.getDigest(), block.getValidatorSignature(), my_current_public_key_));
+}
 
-bracha::ByzantineBehavior string2ByzantineBehavior(std::string str) {
-  // switch (str) {
-  //   case "silent":
-  //     return bracha::ByzantineBehavior::CRASH;
-  //   case "delay_send":
-  //     return bracha::ByzantineBehavior::DELAY_SEND;
-  //   case "partial_send":
-  //     return bracha::ByzantineBehavior::PARTIAL_SEND;
-  //   case "wrong_order":
-  //     return bracha::ByzantineBehavior::WRONG_ORDER;
-  //   case "impersonate":
-  //     return bracha::ByzantineBehavior::IMPERSONATE;
-  //   default:
-  //     throw std::invalid_argument("unexpected Byzantine Behavior value");
-  // }
-  //TODO
-  return bracha::ByzantineBehavior::IMPERSONATE;
+bool bracha::Node::checkBlockSig(const blockchain::Block blk) {
+    blockchain::Block block(blk);
+    int valid = 1;  // default: accept signature if no public key known
+    std::vector<std::string> signature = block.getValidatorSignature();
+    uint16_t node_id = block.getValidatorID();
+    std::string block_digest = block.getDigest();
+    // Check if we have the pub key for this node
+    if (val_sig_keys_.find(node_id) != val_sig_keys_.end()) {
+        // Node ID found in the map, we can check the signature
+        valid = signature::Verify(block_digest, signature, val_sig_keys_[node_id]);
+        //mutex_io_->lock();
+        std::cout << "Node " << id_ << ": signature from node " << node_id << " for block " << block_digest.substr(0, 10) << " with key " << signature::print_SigKey(val_sig_keys_[node_id]) << " -> valid: " << valid << std::endl;
+        //mutex_io_->unlock();
+    }
+    // Save the next pub key
+    val_sig_keys_[node_id] = block.getValidatorNextPublicKey();
+    //mutex_io_->lock();
+    std::cout << "Node " << id_ << ": added next pub key for node " << node_id << ": " << signature::print_SigKey(block.getValidatorNextPublicKey()) << std::endl;
+    //mutex_io_->unlock();
+    return valid == 1;
+}
+
+blockchain::Block Node::getReceivedBlock(std::string block_hash) {
+    std::lock_guard<std::mutex> lock(mutex_cons_);
+    // Check if the block is in the list of received blocks
+    if (blocks_.find(block_hash) != blocks_.end()) {
+        return blockchain::Block(blocks_[block_hash]);
+    }
+    return blockchain::Block();
+}
+
+std::vector<blockchain::Block> Node::getConsensusBlocks(bool erase) {
+    std::lock_guard<std::mutex> lock(mutex_cons_);
+    std::vector<blockchain::Block> blocks;
+    for (std::string hash : accepted_blocks_) {
+        blocks.push_back(blocks_[hash]);
+    }
+    if (erase) {
+        accepted_blocks_.clear();  // TODO
+        should_broadcast_ = false;
+    }
+    return blocks;
+}
+
+void bracha::FaultNode::RunProtocol(bool broadcast, bracha::ByzantineBehavior behaviour) {
+    std::cout << "Faulty node " << id_ << ": Run protocol started in mode: " << byzantineBehavior2String(behaviour) << std::endl;
+    mutex_cons_.lock();
+    should_broadcast_ = behaviour != ByzantineBehavior::CRASH;
+
+    while (should_broadcast_) {
+        mutex_cons_.unlock();
+        // std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (RunTaskInWait()) {
+            broadcastRound();
+        }
+        mutex_cons_.lock();
+    };
+    mutex_cons_.unlock();
 }

@@ -12,17 +12,15 @@
 #include <mutex>
 #include <queue>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
-#include "absl/flags/flag.h"
-#include "absl/flags/parse.h"
-#include "absl/strings/str_format.h"
 #include "blockchain/message.h"
+#include "blockchain/transaction.h"
+#include "blockchain/utxo.h"
 
-using chat::Ack;
 using chat::Chat;
-using chat::Send;
 using grpc::CompletionQueue;
 using grpc::Server;
 using grpc::ServerAsyncResponseWriter;
@@ -35,6 +33,8 @@ namespace comms {
 
 class ChatServiceImpl {
    public:
+    // ChatServiceImpl(){};
+    // ChatServiceImpl(std::condition_variable* cv) : cv_(cv){};
     ~ChatServiceImpl();
 
     /**
@@ -52,37 +52,119 @@ class ChatServiceImpl {
      *
      * Appends all received messages (since last call) in `msg_list`
      * Deletes these messages from internal FIFO queue
+     * Looks only at consensus messages
      *
      * @param msg_list The vector to store the retrieved messages.
      * @return True if there are new messages in `msg_list`, false if there are no new messages
      */
     bool getMessages(std::vector<blockchain::Message>& msg_list);
 
+    /*
+     * Checks if there are new messages for the consensus protocol
+     */
+    bool newConsensusMessages();
+
+    /*
+     * Checks if there are new requests from wallets
+     */
+    bool newRequests();
+
+    /*
+     * Appends all new transactions from wallets in `tx_list`
+     * Deletes these transactions from internal FIFO queue
+     * Returns True if there are new transactions in `tx_list`
+     */
+    bool getTransactions(std::vector<blockchain::Transaction>& tx_list);
+
+    /*
+     * Updates the utxolists in the server
+     */
+    void setUTXOlists(std::unordered_map<uint32_t, blockchain::UTXOlist> utxolists);
+
+    /*
+     * Clears all saved utxolists
+     */
+    void clearUTXOlists();
+
+    /*
+     * Returns a pointer to a condition variable that gets notified when a new message or transaction is received
+     */
+    std::condition_variable* getConditionVariable() { return &cv_; };
+
    public:
     class CallData {
        public:
-        // One Calldata object handling each request thread
-        CallData(Chat::AsyncService* service, ServerCompletionQueue* cq, std::queue<blockchain::Message>* mq,
-                 std::mutex* io_mutex_, std::mutex* mq_mutex_);
+        CallData(Chat::AsyncService* service, ServerCompletionQueue* cq)
+            : cd_service_(service), cd_cq_(cq), status_(CREATE){};
 
-        void Proceed();
+        virtual void Proceed() = 0;
 
-       private:
+       protected:
         Chat::AsyncService* cd_service_;
         ServerCompletionQueue* cd_cq_;
-        std::queue<blockchain::Message>* cd_mq_;
-        std::mutex* cd_mq_mutex_;
-        std::mutex* cd_io_mutex_;
         ServerContext ctx_;
-
-        Send request_;
-        Ack reply_;
-        ServerAsyncResponseWriter<Ack> responder_;
-
         enum CallStatus { CREATE,
                           START_PROCESS,
                           FINISH };
         CallStatus status_;  // The current serving state.
+    };
+
+    class CallDataTalk : public CallData {
+       public:
+        // One Calldata object handling each request thread
+        CallDataTalk(Chat::AsyncService* service, ServerCompletionQueue* cq, std::queue<blockchain::Message>* mq,
+                     std::mutex* io_mutex, std::mutex* mq_mutex, std::condition_variable* cv);
+
+        void Proceed() override;
+
+       private:
+        std::queue<blockchain::Message>* cd_mq_;
+        std::mutex* cd_mq_mutex_;
+        std::mutex* cd_io_mutex_;
+
+        chat::Send request_;
+        chat::Ack reply_;
+        ServerAsyncResponseWriter<chat::Ack> responder_;
+
+        std::condition_variable* cd_cv_ = nullptr;
+    };
+
+    class CallDataNewTx : public CallData {
+       public:
+        // One Calldata object handling each request thread
+        CallDataNewTx(Chat::AsyncService* service, ServerCompletionQueue* cq, std::queue<blockchain::Transaction>* txq,
+                      std::mutex* io_mutex, std::mutex* txq_mutex, std::condition_variable* cv);
+
+        void Proceed() override;
+
+       private:
+        std::queue<blockchain::Transaction>* cd_txq_;
+        std::mutex* cd_io_mutex_;
+        std::mutex* cd_txq_mutex_;
+
+        chat::NewTransaction request_;
+        chat::Ack reply_;
+        ServerAsyncResponseWriter<chat::Ack> responder_;
+
+        std::condition_variable* cd_cv_ = nullptr;
+    };
+
+    class CallDataSync : public CallData {
+       public:
+        // One Calldata object handling each request thread
+        CallDataSync(Chat::AsyncService* service, ServerCompletionQueue* cq, std::unordered_map<uint32_t, blockchain::UTXOlist>* utxolists,
+                     std::mutex* io_mutex, std::mutex* utxolists_mutex);
+
+        void Proceed() override;
+
+       private:
+        std::unordered_map<uint32_t, blockchain::UTXOlist>* cd_utxolists_;
+        std::mutex* cd_utxolists_mutex_;
+        std::mutex* cd_io_mutex_;
+
+        chat::SyncReq request_;
+        chat::SyncReply reply_;
+        ServerAsyncResponseWriter<chat::SyncReply> responder_;
     };
 
    private:
@@ -90,12 +172,17 @@ class ChatServiceImpl {
     Chat::AsyncService service_;
     std::unique_ptr<Server> server_;
     std::unique_ptr<ServerCompletionQueue> cq_;
+    std::atomic<bool> is_running_{true};
 
-    std::queue<blockchain::Message> mq_;
+    std::queue<blockchain::Message> mq_;       // consensus message queue
+    std::queue<blockchain::Transaction> txq_;  // new transactions queue
     std::mutex mq_mutex_;
+    std::mutex txq_mutex_;
     std::mutex io_mutex_;
+    std::unordered_map<uint32_t, blockchain::UTXOlist> utxolists_;
+    std::mutex utxolists_mutex_;
 
-    std::unordered_map<uint32_t, std::vector<blockchain::Message>> messages_per_round_;
+    std::condition_variable cv_;
 };
 }  // namespace comms
 

@@ -7,7 +7,7 @@ message Transaction {
     repeated Input input = 2;
     repeated Output output = 3;
     uint32 senderID = 4;
-    string sendersig = 5;  
+    repeated bytes sendersig = 5;  
     string publickey = 6;
     message Input {
         uint32 txID = 1;
@@ -28,7 +28,7 @@ message Block {
     Header header = 1;
     uint64 blockID = 2;
     repeated Transaction transaction = 3;
-    string validatorSig = 4;
+    repeated bytes validatorSig = 4;
     uint32 validatorID = 5;
     string publickey = 6;
 }
@@ -48,11 +48,7 @@ message Message {
     int32 type = 1;
     int64 sender_id = 2;
     int32 round = 3;
-    oneof send {
-        Block block = 4;
-        Transaction tx = 5;
-        UTXOlist utxolist = 6;
-    }
+    Block block = 4;
 }
 
 message Send {
@@ -61,6 +57,22 @@ message Send {
 
 message Ack { }
 
+message SyncReq {
+    int32 wallet_id = 1;
+}
+
+message SyncReply {
+    UTXOlist utxolist = 1;
+}
+
+message NewTransaction {
+    Transaction transaction = 1;
+}
+
 service Chat {
     rpc Talk (Send) returns (Ack) {}
+
+    rpc Sync (SyncReq) returns (SyncReply) {}
+
+    rpc NewTx (NewTransaction) returns (Ack) {}
 }

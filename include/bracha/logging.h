@@ -11,7 +11,7 @@ namespace logging {
 
 class Logger {
  public:
-  Logger(std::ostream* output) : output_(output), enabled_(false){};
+  Logger(std::ostream* output) : output_(output), enabled_(true){};
 
   inline void enable(bool enable) { enabled_ = enable; };
 

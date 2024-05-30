@@ -2,7 +2,8 @@
 #ifndef COSICOIN_JSON_H
 #define COSICOIN_JSON_H
 
-#include "json/json.hpp"
+#include "json.hpp"
+
 #include <iostream>
 #include <string>
 #include <fstream>
@@ -13,8 +14,24 @@ namespace jsonparser {
 
     class Parser {
         public:
+            Parser(): filename_("../../tx.json") {
+                std::ifstream i(filename_);
+                if (!i.is_open()) {
+                throw std::runtime_error("Tx file oppen failed" + filename_); }
+                i >> jf;
+                //std::ifstream i(filename_);
+                //jf = json::parse(i);
+                i.close();
+            }
+            
             Parser(std::string filename): filename_(filename) {
-                jf = json::parse(filename_);
+                std::ifstream i("../../tx/" + filename_);
+                if (!i.is_open()) {
+                throw std::runtime_error("Tx file oppen failed" + filename_); }
+                i >> jf;
+                //std::ifstream i(filename_);
+                //jf = json::parse(i);
+                i.close();
             }
 
             void output(std::string outname, json& j) {
@@ -31,40 +48,23 @@ namespace jsonparser {
     
     class TransInfo {
         public:
-            TransInfo();
-            int walletid_;
-            std::vector<int>& value_list_;
-            std::vector<int>& out_walletID_list_;
+            TransInfo() {;}
+            uint32_t walletid_;
+            std::vector<uint64_t> out_value_list_;
+            std::vector<uint32_t> out_walletID_list_;
+            
+            std::vector<uint64_t> in_outIDX_list_;
+            std::vector<uint32_t> in_txID_list_;
+            
     };
-
-
-    // For an Trans_info object
-    void from_json(const json& j, TransInfo& t) {
-        j.at("wallet_id").get_to(t.walletid_);
     
-        for (auto &value : j["value_list"]) {
-            t.value_list_.push_back(value);
-        }
+    void from_json(const json& j, TransInfo& t);
 
-        for (auto &value : j["out_walletID_list"]) {
-            t.out_walletID_list_.push_back(value);
-        }
-
-    }
     
-    void to_json(json& j, const TransInfo& s) {
+    void to_json(json& j, const TransInfo& s);
 
-        j = json{ {"wallet_id", s.walletid_} };
 
-        for (auto & t : s.value_list_) {
-            j["value_list"].push_back(t);
-        }
 
-        for (auto & t : s.out_walletID_list_) {
-            j["out_walletID_list"].push_back(t);
-        }
-
-    }
 
 
 }

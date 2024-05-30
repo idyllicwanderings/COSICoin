@@ -7,6 +7,7 @@
 #include <grpcpp/health_check_service_interface.h>
 
 #include <ctime>
+#include <iomanip>
 #include <map>
 #include <set>
 #include <sstream>
@@ -14,18 +15,38 @@
 
 #include "header.h"
 #include "input.h"
+#include "json/json.hpp"
 #include "signature/hash.h"
 #include "transaction.h"
 #include "utxo.h"
 
+using json = nlohmann::json;
+
 namespace blockchain {
+
+/*
+ * Struct to save the signing key of a signature next to the signature
+ */
+struct BlockSignature {
+    std::vector<std::string> signature;
+    signature::SigKey public_key;
+    uint16_t validator_id;
+    uint16_t round;
+
+    friend bool operator==(const BlockSignature& lhs, const BlockSignature& rhs) {
+        return lhs.signature == rhs.signature && lhs.public_key == rhs.public_key && lhs.validator_id == rhs.validator_id && lhs.round == rhs.round;
+    }
+};
 
 class Block {
    public:
     Block(uint64_t id, std::string prevBlockDigest) : header_(blockchain::Header(prevBlockDigest)), id_(id){};
-    Block() : empty_(true), mutable_(false), header_(blockchain::Header("")), id_(0){};  // constructor to make empty block
+    Block() : empty_(true), mutable_(true), header_(blockchain::Header("")), id_(0){};  // constructor to make empty block
     Block(const chat::Block& proto_block);
-    // Block() = default;
+
+    // Copy constructor
+    Block(const blockchain::Block& block) : header_(block.getHeader()), txs_(block.getTransactions()), validator_sig_(block.getValidatorSignature()), validator_id_(block.getValidatorID()), validator_next_public_key_(block.getValidatorNextPublicKey()), id_(block.getID()), empty_(block.isEmpty()), mutable_(block.isMutable()), validatorSigs_(block.getValidatorSignatures()){};
+
     ~Block(){};
 
     // Getter for ID
@@ -33,10 +54,12 @@ class Block {
 
     // Getter for transactions
     std::vector<Transaction> getTransactions() { return txs_; };
+    std::vector<Transaction> getTransactions() const { return txs_; };
 
     // Getter for digest (hash)
     // Returns null if block is still mutable
-    std::string getDigest() const { return header_.getID(); };
+    std::string getDigest();
+    std::string getDigest() const { return getDigest(); };
 
     // Getter for header
     // Return null if block is still mutable
@@ -55,6 +78,7 @@ class Block {
 
     // Returns true if block is still mutable
     bool isMutable() { return mutable_; };
+    bool isMutable() const { return mutable_; };
 
     /*
      * Converts itself to a proto buffer block
@@ -62,9 +86,66 @@ class Block {
      *
      * Important note: block needs to be immutable to be converted!
      */
-    void toProtoBlock(chat::Block* proto_block) const;
+    inline void toProtoBlock(chat::Block* proto_block) const {
+        if (mutable_) {
+            throw std::runtime_error("Cannot convert mutable block.");
+        }
 
-    void fromProtoBlock(const chat::Block& proto_block);
+        // Convert header
+        chat::Header proto_header = header_.toProtoHeader();
+        *proto_block->mutable_header() = proto_header;
+
+        // Convert transactions
+        for (int i = 0; i < txs_.size(); i++) {
+            txs_[i].toProtoTransaction(proto_block->add_transaction());
+        }
+
+        // Convert validator signature
+        for (const std::string sig : validator_sig_) {
+            proto_block->add_validatorsig(sig);
+        }
+
+        // Convert validator id
+        proto_block->set_validatorid(static_cast<uint32_t>(validator_id_));
+
+        // Convert next public key
+        std::string publickey = signature::SigKey_to_string(validator_next_public_key_);
+        proto_block->set_publickey(publickey);
+
+        // Convert block ID
+        proto_block->set_blockid(id_);
+    }
+
+    inline void fromProtoBlock(const chat::Block& proto_block) {
+        // Read header
+        header_ = proto_block.header();
+
+        // Read id
+        id_ = proto_block.blockid();
+
+        // Read transactions
+        for (int i = 0; i < proto_block.transaction_size(); i++) {
+            blockchain::Transaction tx;
+            tx.fromProtoTransaction(proto_block.transaction(i));
+            txs_.push_back(tx);
+        }
+
+        // Read validator signature
+        validator_sig_.clear();
+        for (int i = 0; i < proto_block.validatorsig_size(); i++) {
+            validator_sig_.push_back(proto_block.validatorsig(i));
+        }
+
+        // Read validator id
+        validator_id_ = static_cast<uint16_t>(proto_block.validatorid());
+
+        // Read next pub key
+        std::string publickey = proto_block.publickey();
+        validator_next_public_key_ = signature::SigKey_from_string(publickey);
+
+        mutable_ = false;
+        empty_ = false;
+    }
 
     /*
      * Appends a transaction
@@ -80,7 +161,7 @@ class Block {
     void finalize();
 
     // Verify block & transactions of block
-    bool verify(std::vector<UTXO>& utxo, std::vector<uint32_t>& receiverIDs);
+    bool verify(blockchain::UTXOlist& utxolist, std::vector<uint32_t>& receiverIDs);
 
     // verify whether the new tx is consistent with the existing txs
     bool verifyTxConsist(const blockchain::Transaction& new_tx) const;
@@ -90,37 +171,46 @@ class Block {
      * Calls Signature.Sign() on itself
      * Overwrites the existing signature
      */
-    void sign(signature::Signature current_keypair, uint16_t validator_id, signature::SigKey next_public_key);
+    void sign(signature::SigKey signing_key, uint16_t validator_id, signature::SigKey next_public_key);
 
-    /*
-     * Writes validator signature to given location
-     * Make sure given location has enough space allocated (256)
-     */
-    void getValidatorSignature(unsigned char* signature);
+    bool verifySignature(signature::SigKey public_key);
+
+    std::vector<std::string> getValidatorSignature() { return validator_sig_; };
+    std::vector<std::string> getValidatorSignature() const { return validator_sig_; };
 
     uint16_t getValidatorID() { return validator_id_; };
+    uint16_t getValidatorID() const { return validator_id_; };
 
     signature::SigKey getValidatorNextPublicKey() { return validator_next_public_key_; };
+    signature::SigKey getValidatorNextPublicKey() const { return validator_next_public_key_; };
 
     /*
      * Returns signature for given validator id
-     * Returns 0 if no signature for given validator id
      */
-    int getValidatorSignatureFromList(unsigned char* signature_chr, uint16_t validator_id);
+    std::vector<BlockSignature> getValidatorSignatures() { return validatorSigs_; };
+    std::vector<BlockSignature> getValidatorSignatures() const { return validatorSigs_; };
 
     /*
      * Adds validator signature to signatures list for given validator id
      */
-    void addValidatorSignature(uint16_t validator_id, unsigned char* signature);
+    void addValidatorSignature(BlockSignature sig) { validatorSigs_.push_back(sig); };
 
-    std::string charToString_(const unsigned char* charlist, int size) const;
-    void stringToChar_(unsigned char* charlist, std::string string);
+    /*
+     * Removes all signatures from block
+     */
+    void removeSignatures();
+
+    /*
+     * json converters
+     */
+    std::string to_string();
+    void from_string(std::string block_string);
 
    private:
     blockchain::Header header_;
     std::vector<blockchain::Transaction> txs_;
-    std::map<uint16_t, std::string> validatorSigs_;
-    std::string validator_sig_;
+    std::vector<BlockSignature> validatorSigs_;
+    std::vector<std::string> validator_sig_;
     uint16_t validator_id_;
     signature::SigKey validator_next_public_key_;
     uint64_t id_;

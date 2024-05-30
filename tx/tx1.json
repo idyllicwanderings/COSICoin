@@ -1,0 +1,23 @@
+{
+    "walletID": 0,
+    "ins": [
+        {
+            "txID": 0,
+            "outIDX": 0
+        }
+    ],
+    "outs": [
+        {
+            "value": 10,
+            "outwalletID": 2
+        },
+        {
+            "value": 20,
+            "outwalletID": 1
+        },
+        {
+            "value": 70,
+            "outwalletID": 0
+        }
+    ]
+}

@@ -2,11 +2,14 @@
 
 using namespace blockchain;
 
+/*
 Header::Header(const chat::Header& proto_header) {
     prevBlockDigest_ = proto_header.prevblockdigest();
     merkleRoot_ = proto_header.merkleroot();
 }
+*/
 
+/*
 chat::Header Header::toProtoHeader() const {
     chat::Header proto_header;
 
@@ -15,6 +18,7 @@ chat::Header Header::toProtoHeader() const {
 
     return proto_header;
 }
+*/
 
 void Header::calculateMerkleRoot(std::vector<Transaction> transactions) {
     // If there are no transactions, return empty string
@@ -54,4 +58,17 @@ void Header::calculateMerkleRoot(std::vector<Transaction> transactions) {
 
 std::string Header::getID() const {
     return signature::hash(prevBlockDigest_ + merkleRoot_);
+}
+
+std::string Header::to_string() {
+    json j;
+    j["prevBlockDigest"] = prevBlockDigest_;
+    j["merkleRoot"] = merkleRoot_;
+    return j.dump();
+}
+
+void Header::from_string(std::string header_string) {
+    json j = json::parse(header_string);
+    prevBlockDigest_ = j.at("prevBlockDigest");
+    merkleRoot_ = j.at("merkleRoot");
 }

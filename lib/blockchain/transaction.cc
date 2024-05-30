@@ -2,9 +2,10 @@
 
 using namespace blockchain;
 
-bool Transaction::checkSpendingConditions(std::vector<UTXO>& utxo, std::vector<uint32_t>& publicKeys) {
+bool Transaction::checkSpendingConditions(UTXOlist& utxolist, std::vector<uint32_t>& wallet_ids) {
     // Check if the transaction is coinbase
     if (inputs_.size() == 0) {
+        std::cout << "Transaction::checkSpendingConditions" << " tx is not coinbase" << std::endl;
         return (outputs_.size() == 0);
     }
 
@@ -17,6 +18,7 @@ bool Transaction::checkSpendingConditions(std::vector<UTXO>& utxo, std::vector<u
 
     // Calculate the total value of inputs
     int totalInputValue = 0;
+    std::vector<UTXO> utxo = utxolist.getUTXOList();
     // Check if the transaction is valid, aka check if the input is in the UTXO
     for (int i = 0; i < inputs_.size(); i++) {
         bool found = false;
@@ -28,23 +30,28 @@ bool Transaction::checkSpendingConditions(std::vector<UTXO>& utxo, std::vector<u
             }
         }
         if (!found) {
-            return false;
+           std::cout << "Transaction::checkSpendingConditions" << " input is not in UTXO" << std::endl;
+           return false;
         }
     }
     // Check if the total value of inputs is equal to the total value of outputs
     if (totalInputValue != totalOutputValue) {
+        
+        std::cout << "Transaction::checkSpendingConditions" << " input is unequal to output" << std::endl;
         return false;
     }
     // check if all output receivers are in the publicKeys vector
     for (auto& output : outputs_) {
         bool found = false;
-        for (auto& key : publicKeys) {
+        for (auto& key : wallet_ids) {
             if (output.getReceiverID() == key) {
                 found = true;
                 break;
             }
         }
         if (!found) {
+            
+            std::cout << "Transaction::checkSpendingConditions" << "output's ids is not among the sets" << std::endl;
             return false;
         }
     }
@@ -65,22 +72,16 @@ void Transaction::fromProtoTransaction(const chat::Transaction& proto_transactio
     txID_ = proto_transaction.txid();
     senderID_ = static_cast<uint16_t>(proto_transaction.senderid());
 
-    // Get the sendersig string
-    std::string sendersig = proto_transaction.sendersig();
-
-    // Allocate an array to hold the sendersig data
-    senderSig_ = new unsigned char[sendersig.size()];
-
-    // Copy the sendersig data to the array
-    for (int i = 0; i < sendersig.size(); i++) {
-        senderSig_[i] = static_cast<unsigned char>(sendersig[i]);
+    // read sendersig
+    senderSig_.clear();
+    for (int i = 0; i < proto_transaction.sendersig_size(); i++) {
+        senderSig_.push_back(proto_transaction.sendersig(i));
     }
 
     // Get the public key
     std::string publickey = proto_transaction.publickey();
-    for (int i = 0; i < publickey.size() / 2; i++) {
-        public_key_.S0[i] = static_cast<unsigned char>(publickey[i]);
-        public_key_.S1[i] = static_cast<unsigned char>(publickey[i + publickey.size() / 2]);
+    if (!publickey.empty()) {
+        public_key_ = signature::SigKey_from_string(publickey);
     }
 }
 
@@ -101,23 +102,14 @@ void Transaction::toProtoTransaction(chat::Transaction* transaction) const {
     transaction->set_senderid(static_cast<uint32_t>(senderID_));
 
     std::string publickey;
-    size_t pkSize = sizeof(public_key_.S0);
-    for (int i = 0; i < pkSize; i++) {
-        publickey += (public_key_.S0[i]);
-    }
-    for (int i = 0; i < pkSize; i++) {
-        publickey += (public_key_.S1[i]);
+    if (!public_key_.S0.empty() && !public_key_.S1.empty()) {
+        publickey = signature::SigKey_to_string(public_key_);
     }
     transaction->set_publickey(publickey);
 
-    if (senderSig_ == nullptr) {
-        throw std::runtime_error("Sender signature is not set.");
+    for (const std::string ss : senderSig_) {
+        transaction->add_sendersig(ss);
     }
-    std::string sendersig;
-    for (int i = 0; i < senderSigSize_; i++) {
-        sendersig += (senderSig_[i]);
-    }
-    transaction->set_sendersig(sendersig);
 }
 
 void Transaction::addInput(Input input) {
@@ -130,88 +122,123 @@ void Transaction::addOutput(Output output) {
 
 // hash the concatenation of all the inputs and outputs
 std::string Transaction::getDigest() const {
-    std::string data = "";
+    std::string data = std::to_string(txID_);
     for (auto& input : inputs_) {
         data += std::to_string(input.getTxID());
         data += std::to_string(input.getOutputIndex());
     }
     for (auto& output : outputs_) {
         data += std::to_string(output.getValue());
-        data += output.getReceiverID();
+        data += std::to_string(output.getReceiverID());
     }
     return signature::hash(data);
 }
 
-bool blockchain::operator==(const Transaction& transaction1, const Transaction& transaction2){
-        int inputs = 0;
-        if (transaction1.inputs_.size() == transaction2.inputs_.size()) {
-            for (int i = 0; i < transaction1.inputs_.size(); i++) {
-                if (transaction1.inputs_[i] == transaction2.inputs_[i]) {
-                    inputs = 1;
-                } else {
-                    inputs = 0;
-                    break;
-                }
-            }
-        }
-        int outputs = 0;
-        if (transaction1.outputs_.size() == transaction2.outputs_.size()) {
-            for (int i = 0; i < transaction1.outputs_.size(); i++) {
-                if (transaction1.outputs_[i] == transaction2.outputs_[i]) {
-                    outputs = 1;
-                } else {
-                    outputs = 0;
-                    break;
-                }
-            }
-        }
+std::string Transaction::getStringDigest() const {
+    std::string data = std::to_string(txID_);
+    for (auto& input : inputs_) {
+        data += std::to_string(input.getTxID());
+        data += std::to_string(input.getOutputIndex());
+    }
+    for (auto& output : outputs_) {
+        data += std::to_string(output.getValue());
+        data += std::to_string(output.getReceiverID());
+    }
+    return data;
+}
 
-        int pk0 = 0;
-        if (sizeof(transaction1.public_key_.S0) == sizeof(transaction2.public_key_.S0)) {
-            for (int i = 0; i < sizeof(transaction1.public_key_.S0); i++) {
-                if (transaction1.public_key_.S0[i] == transaction2.public_key_.S0[i]) {
-                    pk0 = 1;
-                } else {
-                    pk0 = 0;
-                    break;
-                }
-            }
+bool blockchain::operator==(const Transaction& transaction1, const Transaction& transaction2) {
+    // Check inputs
+    if (transaction1.getInputs().size() != transaction2.getInputs().size()) {
+        return false;
+    }
+    for (int i = 0; i < transaction1.getInputs().size(); i++) {
+        if (transaction1.getInputAt(i) != transaction2.getInputAt(i)) {
+            return false;
         }
-
-        int pk1 = 0;
-        if (sizeof(transaction1.public_key_.S1) == sizeof(transaction2.public_key_.S1)) {
-            for (int i = 0; i < sizeof(transaction1.public_key_.S1); i++) {
-                if (transaction1.public_key_.S1[i] == transaction2.public_key_.S1[i]) {
-                    pk1 = 1;
-                } else {
-                    pk1 = 0;
-                    break;
-                }
-            }
-        }
-
-        int sig = 0;
-        for (int i = 0; i < transaction1.senderSigSize_; i++) {
-            if (transaction1.senderSig_[i] == transaction2.senderSig_[i]) {
-                sig = 1;
-            } else {
-                sig = 0;
-                break;
-            }
-        }
-
-        return (transaction1.senderID_ == transaction2.senderID_ && transaction1.txID_ == transaction2.txID_ && inputs && outputs && pk0 && pk1 && sig);
     }
 
-// constructor which sets the txid as its hash but thats wrong
-// Transaction::Transaction(std::vector<blockchain::Input> inputs, std::vector<blockchain::Output> outputs,
-//         uint16_t senderID, std::string txID, signature::SigKey public_key){
-//     for (auto& input : inputs_) {
-//         txID_ += input.getTxID();
-//         txID_ += std::to_string(input.getOutputIndex());
-//     }
-//     for (auto& output : outputs_) {
-//         txID_ += std::to_string(output.getValue());
-//         txID_ += output.getReceiverPK();
-//     }
-// }
+    // Check outputs
+    if (transaction1.getOutputs().size() != transaction2.getOutputs().size()) {
+        return false;
+    }
+    for (int i = 0; i < transaction1.getOutputs().size(); i++) {
+        if (transaction1.getOutputAt(i) != transaction2.getOutputAt(i)) {
+            return false;
+        }
+    }
+
+    // Check sendersig
+    if (transaction1.getSenderSig() != transaction2.getSenderSig()) {
+        return false;
+    }
+
+    // Check sender id
+    if (transaction1.getSenderID() != transaction2.getSenderID()) {
+        return false;
+    }
+
+    // Check txid
+    if (transaction1.getID() != transaction2.getID()) {
+        return false;
+    }
+
+    // Check public key
+    if (transaction1.getPublicKey() != transaction2.getPublicKey()) {
+        return false;
+    }
+
+    return true;
+}
+
+std::string Transaction::to_string() {
+    json j;
+
+    j["txID"] = txID_;
+
+    for (blockchain::Input input : inputs_) {
+        j["inputs"].push_back(input.to_string());
+    }
+
+    for (blockchain::Output output : outputs_) {
+        j["outputs"].push_back(output.to_string());
+    }
+
+    j["senderID"] = senderID_;
+
+    j["senderSig"] = signature::signature_to_json(senderSig_);
+
+    if (!public_key_.S0.empty() && !public_key_.S1.empty()) {
+        j["publicKey"] = signature::SigKey_to_string(public_key_);
+    }
+
+    return j.dump();
+}
+
+void Transaction::from_string(std::string tx_string) {
+    json j = json::parse(tx_string);
+
+    txID_ = j.at("txID");
+
+    inputs_.clear();
+    for (std::string el : j.at("inputs")) {
+        blockchain::Input input;
+        input.from_string(el);
+        inputs_.push_back(input);
+    }
+
+    outputs_.clear();
+    for (std::string el : j.at("outputs")) {
+        blockchain::Output output;
+        output.from_string(el);
+        outputs_.push_back(output);
+    }
+
+    senderID_ = j.at("senderID");
+
+    senderSig_ = signature::json_to_string(j.at("senderSig"));
+
+    if (j.contains("publicKey")) {
+        public_key_ = signature::SigKey_from_string(j.at("publicKey"));
+    }
+}

@@ -18,6 +18,14 @@ TEST(HeaderTest, ProtoConvert) {
     EXPECT_EQ(header1.getPrevBlockDigest(), "prevheader");
 }
 
+TEST(HeaderTest, StringConvert) {
+    blockchain::Header header1("prevheader");
+    std::string string_header1 = header1.to_string();
+    blockchain::Header header2;
+    header2.from_string(string_header1);
+    EXPECT_EQ(header1.getPrevBlockDigest(), "prevheader");
+}
+
 TEST(HeaderTest, MerkleRoot) {
     blockchain::Header header("prevheader");
 
